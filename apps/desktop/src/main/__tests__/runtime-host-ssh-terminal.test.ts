@@ -141,7 +141,7 @@ test('includes terminal output in target detection exit errors', async (t) => {
 
   await assert.rejects(
     detection,
-    /Remote Runtime Host target detection exited with code 255 \(output: ssh: connect to host/u,
+    /Remote Runtime Host target detection \[direct\] exited with code 255 \(ssh: .*\) \(output: ssh: connect to host/u,
   );
 });
 

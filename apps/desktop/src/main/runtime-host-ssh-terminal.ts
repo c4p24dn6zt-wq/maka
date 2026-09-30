@@ -668,7 +668,7 @@ export function createDesktopRuntimeHostSshTerminal(input: {
         : requireSetupPort(targetInput.sshPort);
       const marker = `__MAKA_RUNTIME_HOST_TARGET_${randomUUID().replaceAll('-', '')}__`;
       const nodeProbe = `node -e "process.stdout.write('${marker}'+process.platform+':'+process.arch+'\\n')"`;
-      const detect = async (remoteCommand: string) => {
+      const detect = async (remoteCommand: string, probe: 'direct' | 'login') => {
         let identity: DesktopRuntimeHostSshNodeIdentity | undefined;
         let failure: Error | undefined;
         const filter = createRuntimeHostFramedOutputFilter({
@@ -692,9 +692,11 @@ export function createDesktopRuntimeHostSshTerminal(input: {
             failure = error;
           },
         });
+        const sshArgs = sshRemoteCommandArgs(destination, sshPort, remoteCommand);
+        const executablePath = (input.resolveTerminalExecutable ?? resolveSshTerminalExecutable)('ssh');
         const { process, terminal } = startTerminalProcess(
           'ssh',
-          sshRemoteCommandArgs(destination, sshPort, remoteCommand),
+          sshArgs,
           filter.push,
           true,
         );
@@ -712,32 +714,32 @@ export function createDesktopRuntimeHostSshTerminal(input: {
         const output = `${terminal.output}${filter.finish()}`;
         if (failure) throw failure;
         completePresentation(terminal);
-        return { identity, exitCode: wait.exit.code, output };
+        return { identity, exitCode: wait.exit.code, output, executablePath, sshArgs };
       };
-      const direct = await detect(nodeProbe);
+      const direct = await detect(nodeProbe, 'direct');
       if (direct.exitCode === 0) {
         if (!direct.identity) {
           throw new Error(
-            `Remote Runtime Host target detection returned no result${formatDetectionOutput(direct.output)}`,
+            `Remote Runtime Host target detection [direct] returned no result${formatDetectionOutput(direct.output)}`,
           );
         }
         return direct.identity;
       }
       if (direct.exitCode !== 127) {
         throw new Error(
-          `Remote Runtime Host target detection exited with code ${String(direct.exitCode)}${formatDetectionOutput(direct.output)}`,
+          `Remote Runtime Host target detection [direct] exited with code ${String(direct.exitCode)}${formatDetectionCommand(direct.executablePath, direct.sshArgs)}${formatDetectionOutput(direct.output)}`,
         );
       }
       const loginProbe = `exec "\${SHELL:-/bin/sh}" -lic ${quotePosix(`exec ${nodeProbe}`)}`;
-      const login = await detect(loginProbe);
+      const login = await detect(loginProbe, 'login');
       if (login.exitCode !== 0) {
         throw new Error(
-          `Remote Runtime Host target detection exited with code ${String(login.exitCode)}${formatDetectionOutput(login.output)}`,
+          `Remote Runtime Host target detection [login] exited with code ${String(login.exitCode)}${formatDetectionCommand(login.executablePath, login.sshArgs)}${formatDetectionOutput(login.output)}`,
         );
       }
       if (!login.identity) {
         throw new Error(
-          `Remote Runtime Host target detection returned no result${formatDetectionOutput(login.output)}`,
+          `Remote Runtime Host target detection [login] returned no result${formatDetectionOutput(login.output)}`,
         );
       }
       return login.identity;
@@ -1533,6 +1535,10 @@ function formatDetectionOutput(output: string): string {
   const normalized = output.replaceAll('\r', '').trim();
   if (!normalized) return '';
   return ` (output: ${normalized.slice(-2000)})`;
+}
+
+function formatDetectionCommand(executablePath: string, sshArgs: readonly string[]): string {
+  return ` (ssh: ${[executablePath, ...sshArgs].join(' ').slice(-2000)})`;
 }
 
 function requireSetupPort(value: number): number {
