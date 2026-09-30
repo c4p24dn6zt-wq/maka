@@ -705,31 +705,41 @@ export function createDesktopRuntimeHostSshTerminal(input: {
           onAbort: () => dismissPresentation(terminal),
         }, input.terminateProcessTree);
         if (wait.timedOut) throw new Error('Remote Runtime Host target detection timed out');
-        filter.finish();
+        // The frame filter streams non-matching text straight through to the
+        // connecting presentation, so finish() alone only holds the trailing
+        // tail. Combine both: this is exactly what the panel showed, and it is
+        // usually the only record of why ssh itself failed (e.g. exit 255).
+        const output = `${terminal.output}${filter.finish()}`;
         if (failure) throw failure;
         completePresentation(terminal);
-        return { identity, exitCode: wait.exit.code };
+        return { identity, exitCode: wait.exit.code, output };
       };
       const direct = await detect(nodeProbe);
       if (direct.exitCode === 0) {
-        if (!direct.identity)
-          throw new Error('Remote Runtime Host target detection returned no result');
+        if (!direct.identity) {
+          throw new Error(
+            `Remote Runtime Host target detection returned no result${formatDetectionOutput(direct.output)}`,
+          );
+        }
         return direct.identity;
       }
       if (direct.exitCode !== 127) {
         throw new Error(
-          `Remote Runtime Host target detection exited with code ${String(direct.exitCode)}`,
+          `Remote Runtime Host target detection exited with code ${String(direct.exitCode)}${formatDetectionOutput(direct.output)}`,
         );
       }
       const loginProbe = `exec "\${SHELL:-/bin/sh}" -lic ${quotePosix(`exec ${nodeProbe}`)}`;
       const login = await detect(loginProbe);
       if (login.exitCode !== 0) {
         throw new Error(
-          `Remote Runtime Host target detection exited with code ${String(login.exitCode)}`,
+          `Remote Runtime Host target detection exited with code ${String(login.exitCode)}${formatDetectionOutput(login.output)}`,
         );
       }
-      if (!login.identity)
-        throw new Error('Remote Runtime Host target detection returned no result');
+      if (!login.identity) {
+        throw new Error(
+          `Remote Runtime Host target detection returned no result${formatDetectionOutput(login.output)}`,
+        );
+      }
       return login.identity;
     },
     runSetup: async (setupInput, onProgress, onComplete) => {
@@ -1517,6 +1527,12 @@ function sshRemoteCommandArgs(
 
 function quotePosix(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function formatDetectionOutput(output: string): string {
+  const normalized = output.replaceAll('\r', '').trim();
+  if (!normalized) return '';
+  return ` (output: ${normalized.slice(-2000)})`;
 }
 
 function requireSetupPort(value: number): number {

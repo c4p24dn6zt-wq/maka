@@ -116,6 +116,35 @@ test('retries target detection through the POSIX login shell when Node is not on
   assert.deepEqual(await detection, { platform: 'linux', architecture: 'x64' });
 });
 
+test('includes terminal output in target detection exit errors', async (t) => {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const launches: Array<{ args: string[]; pty: FakePty }> = [];
+  const terminal = createDesktopRuntimeHostSshTerminal({
+    ipcMain: {
+      handle: (channel, handler) => handlers.set(channel, handler as (...args: unknown[]) => unknown),
+      removeHandler: (channel) => handlers.delete(channel),
+    },
+    send: () => undefined,
+    spawnPty: ((_file: string, args: string[]) => {
+      const pty = new FakePty();
+      launches.push({ args, pty });
+      return pty as unknown as IPty;
+    }) as typeof import('node-pty').spawn,
+    resolveTerminalExecutable: (executable) => executable,
+  });
+  t.after(() => terminal.close());
+
+  const detection = terminal.resolveNodeIdentity({ destination: 'operator@example.com' });
+  await waitFor(() => launches.length === 1);
+  launches[0]?.pty.emitData('ssh: connect to host example.com port 22: Connection timed out\r\n');
+  launches[0]?.pty.exit(255);
+
+  await assert.rejects(
+    detection,
+    /Remote Runtime Host target detection exited with code 255 \(output: ssh: connect to host/u,
+  );
+});
+
 test('keeps a connecting SSH prompt observable across renderer presentation changes', async () => {
   const harness = createHarness('pending');
   const opening = openTunnel(harness);
